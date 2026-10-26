@@ -73,6 +73,7 @@ async def create_slime(workspace: Path, name: str) -> dict:
         exported = await call(
             "export_six_views", asset_name=name, scale=8, padding=8, expected_revision=3
         )
+        captured = await call("capture_six_views", asset_name=name, expected_revision=3)
         info = await call("get_asset_info", asset_name=name)
         return {
             "asset_name": name,
@@ -81,6 +82,8 @@ async def create_slime(workspace: Path, name: str) -> dict:
             "vox": saved["path"],
             "views": exported["views"],
             "manifest": exported["manifest_path"],
+            "captures": captured["manifest_path"],
+            "contact_sheet": captured["contact_sheet"]["path"],
         }
 
 

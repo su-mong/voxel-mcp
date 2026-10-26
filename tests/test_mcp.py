@@ -17,6 +17,7 @@ CORE_TOOLS = {
     "save_vox",
     "load_vox",
     "list_assets",
+    "capture_six_views",
 }
 
 
@@ -67,6 +68,23 @@ async def workflow(client):
     exported = await call("export_six_views", asset_name="slime", scale=4, expected_revision=3)
     assert len(exported["views"]) == 6
     assert all(Path(v["path"]).is_file() for v in exported["views"].values())
+    captured = await call(
+        "capture_six_views",
+        asset_name="slime",
+        image_size=64,
+        padding=8,
+        background=[248, 248, 248, 255],
+        expected_revision=3,
+    )
+    assert (
+        len(captured["views"]) == 6 and captured["capture_method"] == "headless_model_orthographic"
+    )
+    assert Path(captured["contact_sheet"]["path"]).is_file()
+    assert all(v["width"] == v["height"] == 64 for v in captured["views"].values())
+    invalid_capture = await client.call_tool(
+        "capture_six_views", {"asset_name": "slime", "image_size": 64, "padding": 32}
+    )
+    assert invalid_capture.is_error and "padding" in str(invalid_capture.content)
     result = await client.call_tool(
         "execute_voxel_operations",
         {

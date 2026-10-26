@@ -1,5 +1,19 @@
 # 검증 기록
 
+## v0.1.1 — 모델만 보이는 6면 캡처 (2026-10-27)
+
+- 사용자 확인: MagicaVoxel 창 캡처 대신 앱 UI 없이 모델만 보이는 이미지 저장 기능을 확장했다.
+- `capture_six_views`: 점유 bounds 자동 framing, 공통 배율·정사각형 중앙 정렬, RGBA 배경, 6면 PNG·3×2 모아보기·manifest 원자적 저장.
+- `scripts/test.ps1`: **128 passed**, 전체 커버리지 **95.71%**, 새 `capture.py` **100%**. Ruff lint·format 및 `pip check` 통과.
+- 새 테스트는 비대칭 모델의 여섯 방향을 독립적인 광선 계산으로 확인하고, 공통 배율·crop·중앙 정렬, alpha 배경 합성, 빈 모델, 축소, 엄격한 인수, 7장 픽셀 예산, revision, 결정적 출력, 외부 파일 충돌, 중간 실패 복구를 검증한다.
+- Windows가 새 이미지 디렉터리를 잠시 잠그는 경우에만 최대 5회로 제한해 공개(rename)를 재시도한다. 일시 실패 후 성공과 지속 실패 후 정리·기존 출력 보존을 검사했다.
+- 기존 PNG 투영 회귀 테스트와 실제 MCP stdio legacy/auto 호출에 새 캡처 도구를 포함했다.
+- `examples/capture_asset.py mario_64`를 실제 stdio로 실행했다. 마리오 revision 3을 유지한 채 512×512 PNG 여섯 장과 1536×1072 모아보기를 저장했다.
+- 출력: `workspace/assets/mario_64/captures/r000003_512px_p24_a66f23269870391e/`. 정면과 모아보기를 직접 확인했으며, 일곱 PNG SHA256과 여섯 이미지 크기를 재검증했다.
+- 패키지를 0.1.1로 업데이트했다. 이미 실행 중인 Codex MCP 서버는 연결 재시작 후 새 도구를 읽는다.
+
+## 최초 구현 검증
+
 검증일: 2026-10-26 (Asia/Seoul). Windows, Python 3.12.14, MCP SDK 2.3.0.
 
 - Phase 1 최초 검증: 엔진·스키마·경로 보안 테스트 **39 passed**.

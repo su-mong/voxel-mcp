@@ -25,16 +25,8 @@ VIEWS = {
 }
 
 
-def render_six(asset: VoxelAsset, settings: Settings, scale: int = 8, padding: int = 0) -> dict:
-    scale = TypeAdapter(Scale).validate_python(scale)
-    padding = TypeAdapter(Padding).validate_python(padding)
-    sx, sy, sz = asset.size
-    dimensions = ((sx, sz), (sx, sz), (sy, sz), (sy, sz), (sx, sy), (sx, sy))
-    pixels = sum((w * scale + 2 * padding) * (h * scale + 2 * padding) for w, h in dimensions)
-    if pixels > settings.max_png_pixels:
-        raise VoxelError(
-            "Six-view output exceeds max_png_pixels; reduce scale/padding.", "resource_limit"
-        )
+def surface_images(asset: VoxelAsset):
+    """Yield native-resolution RGBA surfaces in the documented camera orientation."""
     grid = asset.grid
     rays = {
         "front": grid.transpose(1, 2, 0)[:, ::-1, :],
@@ -45,13 +37,26 @@ def render_six(asset: VoxelAsset, settings: Settings, scale: int = 8, padding: i
         "bottom": grid.transpose(2, 1, 0),
     }
     palette = np.array(asset.palette, dtype=np.uint8)
-    output = {}
     for name, ray in rays.items():
         occupied = ray != 0
         nearest = occupied.argmax(axis=0)
         surface = np.take_along_axis(ray, nearest[None, ...], axis=0)[0]
         surface[~occupied.any(axis=0)] = 0
-        image = Image.fromarray(palette[surface])
+        yield name, Image.fromarray(palette[surface])
+
+
+def render_six(asset: VoxelAsset, settings: Settings, scale: int = 8, padding: int = 0) -> dict:
+    scale = TypeAdapter(Scale).validate_python(scale)
+    padding = TypeAdapter(Padding).validate_python(padding)
+    sx, sy, sz = asset.size
+    dimensions = ((sx, sz), (sx, sz), (sy, sz), (sy, sz), (sx, sy), (sx, sy))
+    pixels = sum((w * scale + 2 * padding) * (h * scale + 2 * padding) for w, h in dimensions)
+    if pixels > settings.max_png_pixels:
+        raise VoxelError(
+            "Six-view output exceeds max_png_pixels; reduce scale/padding.", "resource_limit"
+        )
+    output = {}
+    for name, image in surface_images(asset):
         image = image.resize((image.width * scale, image.height * scale), Image.Resampling.NEAREST)
         if padding:
             padded = Image.new("RGBA", (image.width + 2 * padding, image.height + 2 * padding))

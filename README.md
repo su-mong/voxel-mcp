@@ -1,6 +1,6 @@
 # MagicaVoxel Asset MCP
 
-Codex에서 로컬 복셀 에셋을 생성·조회·편집하고 **MagicaVoxel 호환 `.vox`와 6면 PNG**를 출력하는 Python MCP 서버입니다. 모델링 계획은 Codex가 세우고, 서버는 typed operation을 검증·실행합니다. 별도 LLM/API 키, 업로드, MagicaVoxel UI 자동화가 필요하지 않습니다.
+Codex에서 로컬 복셀 에셋을 생성·조회·편집하고 **MagicaVoxel 호환 `.vox`와 6면 PNG**를 출력하는 Python MCP 서버입니다. 모델링 계획은 Codex가 세우고, 서버는 typed operation을 검증·실행합니다. 별도 LLM/API 키, 업로드, MagicaVoxel UI 자동화가 필요하지 않습니다. **v0.1.1**에는 모델만 자동으로 맞춰 저장하는 `capture_six_views`와 6면 모아보기를 추가했습니다.
 
 `PLAN.md`의 Phase 1 → 2 → 3 → 4 순서로 구현했습니다. 사용자 요청에 따라 계획의 PNG 제외 범위를 확장했습니다. 다중 모델·장면 그래프·레이어·고급 재질 편집은 후속 범위이며, 해당 데이터가 들어 있는 파일은 import에서 거절합니다.
 
@@ -81,6 +81,7 @@ VOXEL_WORKSPACE = 'C:\path\to\voxel-mcp\workspace'
 | `list_assets` | `prefix?` | 저장된 에셋 메타데이터 |
 | `undo_voxel_operations` | `asset_name`, `expected_revision?` | 최근 배치 취소·새 revision |
 | `export_six_views` | `asset_name`, `scale?`, `padding?`, `expected_revision?` | PNG 6개·manifest 절대 경로 |
+| `capture_six_views` | `asset_name`, `image_size?`, `padding?`, `background?`, `expected_revision?` | 자동 framing PNG 6개·모아보기·manifest |
 | `open_in_magicavoxel` | `asset_name`, `expected_revision?` | 파일 저장 후 선택적 프로그램 실행 |
 
 Codex에 요청할 예:
@@ -157,6 +158,42 @@ workspace/
 `expected_revision` 생략 시에도 잠금 안에서 최신 상태를 편집하지만, 이전 계획으로 덮어쓰는 것을 막으려면 항상 전달하십시오. 기존 이름을 `load_vox`로 교체할 때는 필수입니다. 새 이름 import는 revision 0, 기존 이름 교체는 현재 값+1이고 undo 이력이 초기화됩니다. save/export는 revision을 바꾸지 않습니다.
 
 ## 6면 PNG 규격
+
+### 모델만 보이는 6면 캡처 (v0.1.1)
+
+`capture_six_views`는 **앱 UI 없이 모델만 보이는 이미지**를 저장합니다. MagicaVoxel 창이나 화면을 캡처하지 않으며 실행 파일 설정이 필요하지 않습니다. 여섯 방향을 고정된 정투영 카메라로 계산합니다. 여백을 제외한 점유 모델의 공통 3D bounds를 구하고, 공통 배율로 확대/축소한 뒤 각 이미지를 정사각형 중앙에 배치합니다. 면마다 따로 화면 가득 확대하지 않으므로 앞·옆·위에서 본 비율을 비교할 수 있습니다.
+
+```json
+{
+  "asset_name": "mario_64",
+  "image_size": 512,
+  "padding": 24,
+  "background": [0, 0, 0, 0],
+  "expected_revision": 3
+}
+```
+
+- `image_size`: 각 면의 출력 가로·세로 픽셀 수, 기본 512, 범위 64..2048.
+- `padding`: 최소 투명/배경 여백 픽셀 수, 기본 24, 범위 0..256, 출력 크기의 절반 미만.
+- `background`: RGBA 바이트 4개, 생략 시 투명 `[0,0,0,0]`. 밝은 배경은 `[245,245,245,255]`처럼 지정합니다.
+- 개별 PNG 6개와 `contact_sheet.png`(3열×2행, 면 이름 표시), `manifest.json`을 함께 원자적으로 저장합니다. 개별 PNG에는 앱 UI나 면 이름이 들어가지 않습니다.
+- 모아보기의 배경은 불투명한 짙은 회색이며, 개별 PNG의 투명도를 유지하면서 한눈에 확인하도록 합성합니다. 기본 512px 출력에서 모아보기는 1536×1072px입니다.
+- `VOXEL_MAX_PNG_PIXELS`는 모아보기를 포함한 **7장 전체**에 적용합니다. 기본 한도에서 2048px 요청은 거절되므로 출력 크기나 설정 한도를 조정해야 합니다.
+- alpha는 가장 가까운 점유 셀의 색상과 요청 배경 사이에서 합성합니다. 반투명 셀 뒤의 복셀까지 추적하는 렌더러는 아닙니다. 조명·그림자·투시는 적용하지 않으며, 픽셀 확대/축소는 nearest-neighbor입니다. 축소 시 가는 부분이 생략될 수 있습니다.
+- 빈 에셋도 배경만 있는 여섯 이미지와 모아보기를 저장하며 manifest에 `empty=true`, `model_bounds=null`을 기록합니다.
+- 파일 경로는 `workspace/assets/<name>/captures/r<revision>_<size>px_p<padding>_<hash>/`입니다. 기존 파일의 묵시적 덮어쓰기를 막고, 같은 설정·상태의 반복 요청은 같은 파일을 재사용합니다. 에셋 revision 및 `.vox` 파일은 바꾸지 않습니다.
+- manifest에는 원본 크기, crop bounds, 공통 배율, 각 면의 content rectangle·방향·크기·경로·SHA256, 모아보기 배치를 기록합니다. 공통 배율 적용 후 각 면의 정수 픽셀 크기는 내림하며 최소 1픽셀을 유지합니다.
+
+기존 에셋을 실제 MCP stdio로 캡처하는 예제:
+
+```powershell
+.\.venv\Scripts\python.exe examples\capture_asset.py mario_64
+.\.venv\Scripts\python.exe examples\capture_asset.py mario_64 --image-size 512 --padding 24 --background 245 245 245 255
+```
+
+업데이트 후 서버를 재시작해 새 MCP 도구 스키마를 불러옵니다. 기존 `export_six_views`는 아래 규격을 유지합니다.
+
+### 원본 그리드·복셀 배율 출력
 
 무조명 정투영으로 각 광선의 가장 가까운 **점유 셀** RGBA를 사용합니다. 배경은 투명하고 원본 팔레트 alpha를 보존합니다. 반투명 셀 뒤의 색 합성, 그림자, 조명, 투시, 안티앨리어싱은 제공하지 않습니다. 확대는 nearest-neighbor이며 `scale=1..16`(기본 8), `padding=0..64`(기본 0, 최종 출력 픽셀 단위)입니다. 프레임은 모델 전체 크기를 유지하며 자동 crop하지 않습니다.
 
@@ -236,7 +273,7 @@ New-Item -ItemType Directory -Path workspace\test-tmp -Force | Out-Null
 
 ## 코드 구조
 
-`models`/`palette`는 데이터 계약, `operations`/`geometry`는 순수 복셀 연산, `asset_store`는 안전 경로·잠금·상태·undo, `vox_io`는 파일 포맷, `render`는 6면 투영, `service`는 저장·불러오기·내보내기, `launcher`는 선택적 프로그램 열기, `server`는 얇은 MCP 어댑터입니다.
+`models`/`palette`는 데이터 계약, `operations`/`geometry`는 순수 복셀 연산, `asset_store`는 안전 경로·잠금·상태·undo, `vox_io`는 파일 포맷, `render`는 6면 투영, `capture`는 모델 framing·배경·모아보기, `service`는 저장·불러오기·내보내기, `launcher`는 선택적 프로그램 열기, `server`는 얇은 MCP 어댑터입니다.
 
 기술 참고: [MCP SDK v2](https://py.sdk.modelcontextprotocol.io/), [기본 VOX 명세](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox.txt), [확장 청크 참고](https://github.com/huhlig/voxfile/blob/master/vox.md).
 

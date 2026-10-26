@@ -11,6 +11,7 @@ from pydantic import StrictStr
 
 from . import __version__
 from .asset_store import AssetStore
+from .capture import Background, CapturePadding, CaptureSize
 from .config import Settings
 from .errors import VoxelError
 from .models import Point, Revision
@@ -28,6 +29,8 @@ Only basic single-model VOX files are supported. Scene/layer/material/unknown ch
 Asset names are normalized to lowercase. Files stay in the configured workspace. Relative import paths
 are relative to workspace; external imports require configured read_roots. No uploads or LLM calls.
 save_vox detects external changes; explicitly load them before overwriting.
+Use capture_six_views for model-only, auto-framed square PNGs and a six-view contact sheet.
+Use export_six_views for the original voxel-scale, full-grid PNGs. Neither requires an app window.
 """
 
 
@@ -149,6 +152,29 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         Returns six absolute paths, dimensions, camera axes and SHA256 hashes; revision does not change.
         """
         return service.export_six_views(asset_name, scale, padding, expected_revision)
+
+    @mcp.tool(annotations=write)
+    @guarded
+    def capture_six_views(
+        asset_name: StrictStr,
+        image_size: CaptureSize = 512,
+        padding: CapturePadding = 24,
+        background: Background | None = None,
+        expected_revision: Revision | None = None,
+    ) -> dict[str, Any]:
+        """Save six model-only square PNG captures plus a labeled 3x2 contact_sheet.png and manifest.
+        Headless: no MagicaVoxel window, app UI, screen capture or executable is required.
+        Automatically crop empty world margins and center the model, using one common scale across views.
+        image_size=64..2048 pixels per side (default 512); padding=0..256 pixels, less than half image_size.
+        background is [R,G,B,A] with bytes 0..255, default transparent. Nearest occupied surfaces,
+        nearest-neighbor resizing, no lighting or shadows; partial-alpha surfaces composite over background.
+        Contact sheet uses a dark opaque backdrop. Pixel budget includes all seven images.
+        Front=-Y/back=+Y/left=-X/right=+X/top=+Z/bottom=-Z; axes, crop bounds, dimensions,
+        SHA256 hashes and absolute file paths are in manifest. Atomic versioned output; revision unchanged.
+        """
+        return service.capture_six_views(
+            asset_name, image_size, padding, background, expected_revision
+        )
 
     @mcp.tool(annotations=write)
     @guarded

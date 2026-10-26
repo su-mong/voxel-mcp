@@ -5,10 +5,12 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from . import vox_io
 from .asset_store import AssetStore, reject_links
+from .capture import capture_six
 from .errors import VoxelError
 from .launcher import open_file
 from .render import render_six
@@ -128,30 +130,100 @@ class AssetService:
             manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
             files = {f"{name}.png": view["data"] for name, view in views.items()}
             files["manifest.json"] = manifest_bytes
-            if folder.exists():
-                for filename, data in files.items():
-                    path = folder / filename
-                    reject_links(path, self.store.root)
-                    if (
-                        not path.is_file()
-                        or path.stat().st_size != len(data)
-                        or path.read_bytes() != data
-                    ):
-                        raise VoxelError(
-                            "Existing PNG bundle was modified; export with a different scale/padding or revision.",
-                            "file_conflict",
-                        )
-                return manifest
-            stage = Path(tempfile.mkdtemp(prefix=".voxel-views-", dir=parent))
-            try:
-                for filename, data in files.items():
-                    self.store.atomic_write(stage / filename, data)
+            self._publish_images(folder, files)
+            return manifest
+
+    def _publish_images(self, folder: Path, files: dict[str, bytes]):
+        """Publish a complete immutable image bundle or leave all previous bundles intact."""
+        reject_links(folder, self.store.root)
+        if folder.exists():
+            for filename, data in files.items():
+                path = folder / filename
+                reject_links(path, self.store.root)
+                if (
+                    not path.is_file()
+                    or path.stat().st_size != len(data)
+                    or path.read_bytes() != data
+                ):
+                    raise VoxelError(
+                        "Existing PNG bundle was modified; use different capture settings or revision.",
+                        "file_conflict",
+                    )
+            return
+        stage = Path(tempfile.mkdtemp(prefix=".voxel-views-", dir=folder.parent))
+        try:
+            for filename, data in files.items():
+                self.store.atomic_write(stage / filename, data)
+            for attempt in range(5):
                 reject_links(folder, self.store.root)
-                os.replace(stage, folder)
-            finally:
-                if stage.exists():
-                    reject_links(stage, self.store.root)
-                    shutil.rmtree(stage)
+                try:
+                    os.replace(stage, folder)
+                    break
+                except PermissionError:
+                    # Windows thumbnailers/AV can briefly hold new image directories.
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        finally:
+            if stage.exists():
+                reject_links(stage, self.store.root)
+                shutil.rmtree(stage)
+
+    def capture_six_views(
+        self,
+        name: str,
+        image_size: int = 512,
+        padding: int = 24,
+        background: list[int] | None = None,
+        expected_revision: int | None = None,
+    ) -> dict:
+        with self.store.locked():
+            asset, _ = self.store._read(name)
+            self.store.check_revision(asset, expected_revision)
+            capture = capture_six(asset, self.store.settings, image_size, padding, background)
+            views = capture.pop("views")
+            sheet = capture.pop("contact_sheet")
+            digest = hashlib.sha256(
+                json.dumps({"capture_format_version": 1, **capture}, sort_keys=True).encode("utf-8")
+                + b"".join(view["data"] for view in views.values())
+                + sheet["data"]
+            ).hexdigest()
+            parent = self.store.path("assets", asset.asset_name, "captures")
+            parent.mkdir(parents=True, exist_ok=True)
+            folder = self.store.path(
+                "assets",
+                asset.asset_name,
+                "captures",
+                f"r{asset.revision:06d}_{image_size}px_p{padding}_{digest[:16]}",
+            )
+            manifest = {
+                "ok": True,
+                "asset_name": asset.asset_name,
+                "revision": asset.revision,
+                "format_version": 1,
+                "capture_method": "headless_model_orthographic",
+                "projection": "orthographic_nearest_occupied_surface",
+                **capture,
+                "views": {},
+                "warnings": [],
+            }
+            files = {}
+            for name, view in [*views.items(), ("contact_sheet", sheet)]:
+                data = view["data"]
+                metadata = {k: v for k, v in view.items() if k != "data"}
+                metadata.update(
+                    path=str(folder / f"{name}.png"), sha256=hashlib.sha256(data).hexdigest()
+                )
+                if name == "contact_sheet":
+                    manifest["contact_sheet"] = metadata
+                else:
+                    manifest["views"][name] = metadata
+                files[f"{name}.png"] = data
+            manifest["manifest_path"] = str(folder / "manifest.json")
+            files["manifest.json"] = json.dumps(manifest, indent=2, ensure_ascii=False).encode(
+                "utf-8"
+            )
+            self._publish_images(folder, files)
             return manifest
 
     def open_in_magicavoxel(self, name: str, expected_revision: int | None = None) -> dict:

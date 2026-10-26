@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "magica-voxel-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local, atomic voxel editing with MagicaVoxel VOX and six orthographic PNG views over MCP"
 requires-python = ">=3.11"
 dependencies = [
